@@ -35,13 +35,14 @@ if github_url:
     openai.api_key = st.secrets["OPENAI_API_KEY"]
 
     try:
-        response = openai.ChatCompletion.create(
+        response = openai.chat.completions.create(
             model="gpt-4",
             messages=[
-                {"role": "system", "content": "You are a compliance expert in the EU AI Act."},
-                {"role": "user", "content": prompt}
+            {"role": "system", "content": "You are a compliance expert in the EU AI Act."},
+            {"role": "user",   "content": prompt}
             ]
         )
+
 
         reply = response.choices[0].message.content
         st.markdown("### 🧠 AI Risk Assessment")

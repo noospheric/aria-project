@@ -9,7 +9,7 @@ def extract_metadata(github_url: str) -> dict:
     from github import Github
     import os
 
-    token = os.getenv("GITHUB_TOKEN", "").strip()
+    token = st.secrets["GITHUB_TOKEN"]
     gh    = Github(token) if token else Github()
     path  = urlparse(github_url).path.lstrip("/")
     owner, name = path.split("/")[:2]

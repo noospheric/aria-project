@@ -74,19 +74,17 @@ st.title("Akifa.ai")
 st.subheader("EU AI Act Risk Analyzer")
 github_url = st.text_input("Enter the GitHub repository URL:")
 
-system_message = {
-    "role": "system",
-    "content": "You are a compliance expert on the EU AI Act. Classify systems into the correct risk category: Unacceptable, High, Limited or Minimal. Provide a concise justification in bullet points."
-}
+#system_message = {
+#    "role": "system",
+#    "content": "You are a compliance expert on the EU AI Act. Classify systems into the correct risk category: Unacceptable, High, Limited or Minimal. Provide a concise justification in bullet points."
+#}
 
 if github_url:
     st.info("🔁 Fetching metadata…")
     metadata = extract_metadata(github_url)
 
     # Build LLM prompt
-    prompt =  f"""
-Classify this AI system by EU AI Act risk level and give a short explanation.
-
+    summary =  f"""
 Summary (first 5000 chars):
 {metadata['readme_summary']}
 
@@ -122,26 +120,42 @@ Biometric data used:
 
 Human-in-the-loop:
 {"Yes" if metadata['human_in_loop'] else "No"}
-
-Based on all the above, what is the EU AI risk level and why?
-Itemize your assesment.
 """
     
-    user_message = {
-    "role": "user",
-    "content": prompt
-    }
-
-    print(prompt)
+    #print(summary)
     openai.api_key = st.secrets["OPENAI_API_KEY"]
-    try:
-        resp = openai.chat.completions.create(
-            model="gpt-4",
-            messages=[system_message, user_message]
-        )
-        answer = resp.choices[0].message.content
-        st.markdown("### 🧠 AI Risk Assessment")
-        st.success(answer)
+    client = openai.OpenAI()
+    
+    # ———————————————————————————————
+    # 4️⃣ Create a Thread for this user interaction
+    # ———————————————————————————————
+    thread = client.beta.threads.create()
 
-    except Exception as e:
-        st.error(f"API Error: {e}")
+    # 5️⃣ Add the user’s “message” containing your summary
+    client.beta.threads.messages.create(
+        thread_id=thread.id,
+        role="user",
+        content=(
+            "Here’s the project summary for EU AI Act classification:\n\n"
+            f"{summary}"
+        )
+    )
+
+    # 6️⃣ Run the Assistant on that thread
+    run = client.beta.threads.runs.create_and_poll(
+        thread_id=thread.id,
+        assistant_id="asst_DnkOcoj4OjCx5tu94QUp6X2L",
+    )
+
+        
+    # 7️⃣ Pull back the assistant’s reply
+    if run.status == "completed":
+        messages = client.beta.threads.messages.list(thread_id=thread.id)
+        # the last message is from the assistant
+        answer   = messages.data[-1].content
+        st.markdown("### 🧠 AI Risk Assessment with Citations")
+        st.write(answer)
+    else:
+        st.error(f"Assistant run status: {run.status}")
+        
+    

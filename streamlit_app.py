@@ -1,14 +1,10 @@
-import os
+import re
 import streamlit as st
 import openai
 from github import Github
 from urllib.parse import urlparse
 
 def extract_metadata(github_url: str) -> dict:
-    from urllib.parse import urlparse
-    from github import Github
-    import os
-
     token = st.secrets["GITHUB_TOKEN"]
     gh    = Github(token) if token else Github()
     path  = urlparse(github_url).path.lstrip("/")
@@ -69,6 +65,32 @@ def extract_metadata(github_url: str) -> dict:
         "human_in_loop": "human-in-the-loop" in blob
     }
 
+
+def extract_file_citation_blurbs(message):
+    """
+    Given a single assistant Message, return a list of
+    {snippet, file_id, raw_marker} dicts for each FileCitationAnnotation.
+    """
+    if not message.content:
+        return []
+
+    block      = message.content[0]
+    text_obj   = block.text
+    full_value = text_obj.value
+    blurbs     = []
+
+    for ann in text_obj.annotations:
+        if ann.type == "file_citation":
+            snippet = full_value[ann.start_index:ann.end_index]
+            blurbs.append({
+                "snippet":    snippet,
+                "file_id":    ann.file_citation.file_id,
+                "raw_marker": ann.text
+            })
+    return blurbs
+
+
+
 # --- Streamlit UI ---
 st.title("Akifa.ai")
 st.subheader("EU AI Act Risk Analyzer")
@@ -82,9 +104,11 @@ github_url = st.text_input("Enter the GitHub repository URL:")
 if github_url:
     st.info("🔁 Fetching metadata…")
     metadata = extract_metadata(github_url)
+else:
+    st.stop()
 
-    # Build LLM prompt
-    summary =  f"""
+# Build LLM prompt
+summary =  f"""
 Summary (first 5000 chars):
 {metadata['readme_summary']}
 
@@ -104,7 +128,7 @@ Topics:
 {', '.join(metadata['topics']) or 'None'}
 
 License:
-{license}
+{metadata['license']}
 
 Stats:
  • Stars: {metadata['stars']}
@@ -122,40 +146,102 @@ Human-in-the-loop:
 {"Yes" if metadata['human_in_loop'] else "No"}
 """
     
-    #print(summary)
-    openai.api_key = st.secrets["OPENAI_API_KEY"]
-    client = openai.OpenAI()
+#print(summary)
+openai.api_key = st.secrets["OPENAI_API_KEY"]
+client = openai.OpenAI()
     
-    # ———————————————————————————————
-    # 4️⃣ Create a Thread for this user interaction
-    # ———————————————————————————————
-    thread = client.beta.threads.create()
+# ———————————————————————————————
+# 4️⃣ Create a Thread for this user interaction
+# ———————————————————————————————
+thread = client.beta.threads.create()
+thread_id = thread.id
 
-    # 5️⃣ Add the user’s “message” containing your summary
-    client.beta.threads.messages.create(
-        thread_id=thread.id,
-        role="user",
-        content=(
-            "Here’s the project summary for EU AI Act classification:\n\n"
-            f"{summary}"
-        )
+# 5️⃣ Add the user’s “message” containing your summary
+client.beta.threads.messages.create(
+    thread_id=thread_id,
+    role="user",
+    content=(
+        "Here’s the project summary for EU AI Act classification:\n\n"
+        f"{summary}"
     )
+)
 
-    # 6️⃣ Run the Assistant on that thread
-    run = client.beta.threads.runs.create_and_poll(
-        thread_id=thread.id,
-        assistant_id="asst_DnkOcoj4OjCx5tu94QUp6X2L",
-    )
+# … your Streamlit UI up through running the assistant …
+run = client.beta.threads.runs.create_and_poll(
+    thread_id=thread_id,
+    assistant_id="asst_DnkOcoj4OjCx5tu94QUp6X2L",
+)
 
-        
-    # 7️⃣ Pull back the assistant’s reply
-    if run.status == "completed":
-        messages = client.beta.threads.messages.list(thread_id=thread.id)
-        # the last message is from the assistant
-        answer   = messages.data[-1].content
-        st.markdown("### 🧠 AI Risk Assessment with Citations")
-        st.write(answer)
-    else:
-        st.error(f"Assistant run status: {run.status}")
-        
-    
+# Once it’s done, grab the assistant message:
+if run.status != "completed":
+    st.error(f"Run status: {run.status}")
+    st.stop()
+
+# 2️⃣ Grab the run ID into local
+run_id    = run.id    # <-- this must exist on the run object
+
+# 3️⃣ List all steps for that run
+steps_page = client.beta.threads.runs.steps.list(
+    thread_id=thread_id,
+    run_id=run_id,
+)
+# 2️⃣ Filter down to only the tool_calls steps:
+tool_steps = [
+    s for s in steps_page.data
+    if getattr(s, "type", None) == "tool_calls"
+]
+
+# 3️⃣ Find the step that actually ran file_search:
+file_search_step = next(
+    s for s in tool_steps
+    if any(hasattr(tc, "file_search") for tc in s.step_details.tool_calls)
+)
+
+# 5️⃣ Retrieve that single step *with* chunk contents
+step_detail = client.beta.threads.runs.steps.retrieve(
+    thread_id=thread_id,
+    run_id=run_id,
+    step_id=file_search_step.id,
+    include=["step_details.tool_calls[*].file_search.results[*].content"],
+)
+
+# 6️⃣ Pull out the raw file_search results
+file_search_results = []
+for tc in step_detail.step_details.tool_calls:
+    if hasattr(tc, "file_search"):
+        file_search_results = tc.file_search.results
+        break
+
+# 7️⃣ Now get the assistant’s message and its annotations
+page          = client.beta.threads.messages.list(thread_id=thread_id)
+assistant_msg = next(m for m in page.data if m.role == "assistant")
+text_obj      = assistant_msg.content[0].text
+
+# 8️⃣ Map each annotation to its chunk
+blurbs = []
+for ann in text_obj.annotations:
+    if ann.type != "file_citation":
+        continue
+    m = re.match(r"【\d+:(\d+)†source】", ann.text)
+    if not m:
+        continue
+    idx = int(m.group(1))
+    if idx < len(file_search_results):
+        blurbs.append({
+            "marker": ann.text,
+            "chunk":  file_search_results[idx].content[0].text,
+            "score":  file_search_results[idx].score,
+        })
+
+# 9️⃣ Display
+st.markdown("### AI Risk Assessment")
+st.write(text_obj.value)
+
+st.markdown("### References")
+shown_markers = set()
+for b in blurbs:
+    if b['marker'] not in shown_markers:
+        st.write(f"**{b['marker']}**")
+        st.write(b["chunk"])
+        st.write("---")
+        shown_markers.add(b['marker'])

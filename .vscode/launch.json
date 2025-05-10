@@ -1,0 +1,21 @@
+{
+    "name": "Streamlit: Run app.py",
+    "type": "python",
+    "request": "launch",
+    "module": "streamlit.cli",
+    "args": [
+        "run",
+        "${workspaceFolder}/streamlit_app.py"
+    ],
+    "console": "integratedTerminal",
+    "justMyCode": true,
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        }
+    ]
+}

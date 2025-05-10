@@ -34,79 +34,95 @@ if not github_url:
     st.info("🔁 Waiting for repository URL input...")
     st.stop()
 
+
+def list_all_files(repo, path=""):
+    files = []
+    try:
+        contents = repo.get_contents(path)
+    except:
+        return files
+    for item in contents:
+        if item.type == "dir":
+            files += list_all_files(repo, item.path)
+        else:
+            if item.path.lower().endswith((".py", ".md", ".yml", ".yaml", ".json", ".txt")):
+                files.append(item.path)
+    return files
+
+def extract_metadata(github_url: str) -> dict:
+    token = st.secrets.get("GITHUB_TOKEN")
+    gh = Github(token) if token else Github()
+    path = urlparse(github_url).path.lstrip("/")
+    owner, name = path.split("/")[:2]
+    repo = gh.get_repo(f"{owner}/{name}")
+
+    # README + requirements
+    try:
+        readme = repo.get_readme().decoded_content.decode()
+    except:
+        readme = ""
+    try:
+        req = repo.get_contents("requirements.txt")
+        reqs = req.decoded_content.decode().splitlines()
+    except:
+        reqs = []
+
+    # Core metadata
+    languages    = repo.get_languages()
+    topics       = repo.get_topics()
+    license_id   = repo.get_license().license.spdx_id if repo.get_license() else "NONE"
+    stars        = repo.stargazers_count
+    forks        = repo.forks_count
+    issues       = repo.open_issues_count
+    last_push    = repo.pushed_at.isoformat()
+    size_kb      = repo.size
+    try:
+        repo.get_contents(".github/workflows")
+        has_ci = True
+    except:
+        has_ci = False
+    contribs     = repo.get_contributors().totalCount
+
+    blob = (readme + "\n" + "\n".join(reqs)).lower()
+    tags = [kw for kw in ["finance","health","education","surveillance"] if kw in blob]
+
+    # EU AI Act metrics
+    biometric_data = "biometric" in blob
+    human_in_loop  = "human-in-the-loop" in blob
+    # Privacy Impact Assessment presence (Annex IV)
+    try:
+        file_list = repo.get_contents('.')
+        pia_present = any(f.path.lower().endswith(('pia.md','privacy_impact_assessment.md')) for f in file_list)
+    except:
+        pia_present = False
+    # Documentation coverage heuristic
+    readme_summary = readme[:5000] + ("…" if len(readme)>5000 else "")
+    doc_coverage = "Good" if len(readme_summary) > 1000 else "Limited"
+
+    return {
+        "readme_summary": readme_summary,
+        "requirements": reqs,
+        "languages": languages,
+        "topics": topics,
+        "license": license_id,
+        "stars": stars,
+        "forks": forks,
+        "open_issues": issues,
+        "last_push": last_push,
+        "size_kb": size_kb,
+        "has_ci": has_ci,
+        "contributors": contribs,
+        "domain": tags[0] if tags else "General",
+        "tags": tags,
+        "biometric_data": biometric_data,
+        "human_in_loop": human_in_loop,
+        "pia_present": pia_present,
+        "doc_coverage": doc_coverage
+    }
+
+
 # --- Fetch & Extract Metadata ---
 with st.spinner("Scanning repository and extracting metadata..."):
-    def extract_metadata(github_url: str) -> dict:
-        token = st.secrets.get("GITHUB_TOKEN")
-        gh = Github(token) if token else Github()
-        path = urlparse(github_url).path.lstrip("/")
-        owner, name = path.split("/")[:2]
-        repo = gh.get_repo(f"{owner}/{name}")
-
-        # README + requirements
-        try:
-            readme = repo.get_readme().decoded_content.decode()
-        except:
-            readme = ""
-        try:
-            req = repo.get_contents("requirements.txt")
-            reqs = req.decoded_content.decode().splitlines()
-        except:
-            reqs = []
-
-        # Core metadata
-        languages    = repo.get_languages()
-        topics       = repo.get_topics()
-        license_id   = repo.get_license().license.spdx_id if repo.get_license() else "NONE"
-        stars        = repo.stargazers_count
-        forks        = repo.forks_count
-        issues       = repo.open_issues_count
-        last_push    = repo.pushed_at.isoformat()
-        size_kb      = repo.size
-        try:
-            repo.get_contents(".github/workflows")
-            has_ci = True
-        except:
-            has_ci = False
-        contribs     = repo.get_contributors().totalCount
-
-        blob = (readme + "\n" + "\n".join(reqs)).lower()
-        tags = [kw for kw in ["finance","health","education","surveillance"] if kw in blob]
-
-        # EU AI Act metrics
-        biometric_data = "biometric" in blob
-        human_in_loop  = "human-in-the-loop" in blob
-        # Privacy Impact Assessment presence (Annex IV)
-        try:
-            file_list = repo.get_contents('.')
-            pia_present = any(f.path.lower().endswith(('pia.md','privacy_impact_assessment.md')) for f in file_list)
-        except:
-            pia_present = False
-        # Documentation coverage heuristic
-        readme_summary = readme[:5000] + ("…" if len(readme)>5000 else "")
-        doc_coverage = "Good" if len(readme_summary) > 1000 else "Limited"
-
-        return {
-            "readme_summary": readme_summary,
-            "requirements": reqs,
-            "languages": languages,
-            "topics": topics,
-            "license": license_id,
-            "stars": stars,
-            "forks": forks,
-            "open_issues": issues,
-            "last_push": last_push,
-            "size_kb": size_kb,
-            "has_ci": has_ci,
-            "contributors": contribs,
-            "domain": tags[0] if tags else "General",
-            "tags": tags,
-            "biometric_data": biometric_data,
-            "human_in_loop": human_in_loop,
-            "pia_present": pia_present,
-            "doc_coverage": doc_coverage
-        }
-
     metadata = extract_metadata(github_url)
 
 # --- Display Core Summary ---

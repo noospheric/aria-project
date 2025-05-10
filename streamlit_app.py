@@ -15,7 +15,6 @@ st.set_page_config(
 official_legislation_url = "https://eur-lex.europa.eu/eli/reg/2024/1689"
 # --- Branding & Logo ---
 with st.sidebar:
-    #st.image("https://your-corporate-logo-url.com/logo.png", width=150)
     st.markdown("### EU AI Act Risk Analyzer")
     st.markdown("**Version:** [OJ_L_202401689](%s)" % official_legislation_url)
 
@@ -44,6 +43,7 @@ with st.spinner("Scanning repository and extracting metadata..."):
         owner, name = path.split("/")[:2]
         repo = gh.get_repo(f"{owner}/{name}")
 
+        # README + requirements
         try:
             readme = repo.get_readme().decoded_content.decode()
         except:
@@ -54,6 +54,7 @@ with st.spinner("Scanning repository and extracting metadata..."):
         except:
             reqs = []
 
+        # Core metadata
         languages    = repo.get_languages()
         topics       = repo.get_topics()
         license_id   = repo.get_license().license.spdx_id if repo.get_license() else "NONE"
@@ -72,9 +73,21 @@ with st.spinner("Scanning repository and extracting metadata..."):
         blob = (readme + "\n" + "\n".join(reqs)).lower()
         tags = [kw for kw in ["finance","health","education","surveillance"] if kw in blob]
 
+        # EU AI Act metrics
+        biometric_data = "biometric" in blob
+        human_in_loop  = "human-in-the-loop" in blob
+        # Privacy Impact Assessment presence (Annex IV)
+        try:
+            file_list = repo.get_contents('.')
+            pia_present = any(f.path.lower().endswith(('pia.md','privacy_impact_assessment.md')) for f in file_list)
+        except:
+            pia_present = False
+        # Documentation coverage heuristic
+        readme_summary = readme[:5000] + ("…" if len(readme)>5000 else "")
+        doc_coverage = "Good" if len(readme_summary) > 1000 else "Limited"
+
         return {
-            "readme_summary": readme[:5000] + ("…" if len(readme)>5000 else ""),
-            "tags": tags,
+            "readme_summary": readme_summary,
             "requirements": reqs,
             "languages": languages,
             "topics": topics,
@@ -87,8 +100,11 @@ with st.spinner("Scanning repository and extracting metadata..."):
             "has_ci": has_ci,
             "contributors": contribs,
             "domain": tags[0] if tags else "General",
-            "biometric_data": "biometric" in blob,
-            "human_in_loop": "human-in-the-loop" in blob
+            "tags": tags,
+            "biometric_data": biometric_data,
+            "human_in_loop": human_in_loop,
+            "pia_present": pia_present,
+            "doc_coverage": doc_coverage
         }
 
     metadata = extract_metadata(github_url)
@@ -106,35 +122,34 @@ st.bar_chart(lang_df['pct'])
 
 # --- Domain & Topics Overview ---
 st.subheader("Domain & Repository Topics")
-# Single domain tag metric
 st.metric("Domain Tag", metadata['domain'])
-# GitHub topics list
 if metadata['topics']:
     st.write("**Topics:** " + ", ".join(metadata['topics']))
 else:
     st.info("No GitHub topics identified.")
 
 # --- Compliance Stats (Native) ---
-st.subheader("🔒 EU AI Act Compliance Metrics")
-# Compliance-focused checks (drop CI, focus on biometric & oversight)
-c1, c2 = st.columns(2)
-c1.metric("Biometric Data Used", "Yes" if metadata['biometric_data'] else "No")
-c2.metric("Human Oversight", "Yes" if metadata['human_in_loop'] else "No")
+st.subheader("🔒 EU AI Act & Governance Metrics")
+col_a, col_b, col_c, col_d = st.columns(4)
+col_a.metric("Biometric Data Used", "Yes" if metadata['biometric_data'] else "No")
+col_b.metric("Human Oversight", "Yes" if metadata['human_in_loop'] else "No")
+col_c.metric("PIA Document", "Found" if metadata['pia_present'] else "Not Found")
+col_d.metric("Docs Coverage", metadata['doc_coverage'])
 
-# Risk factor summary
-total_factors = 2  # biometric_data, oversight
-factors_present = sum([metadata['biometric_data'], not metadata['human_in_loop']])
-st.metric("Risk Factors Present", f"{factors_present}/{total_factors}")
+# Overall compliance checks
+checks = [metadata['biometric_data'], not metadata['human_in_loop'], metadata['pia_present'], metadata['doc_coverage']=="Good"]
+st.metric("Compliance Checks Passed", f"{sum(checks)}/{len(checks)}")
 
 # Act-specific guidance
 if metadata['biometric_data']:
     st.info("⚠️ Biometric processing is listed as a high-risk use under Annex II of the EU AI Act.")
 if metadata['biometric_data'] and not metadata['human_in_loop']:
     st.warning("❗ High-risk features detected without explicit human oversight — Article 14 requires adequate human-in-the-loop measures.")
+if not metadata['pia_present']:
+    st.warning("📝 Repository lacks a Privacy Impact Assessment (Annex IV requirement for high-risk AI systems).")
 
 # Additional repository health stats
 st.subheader("📈 Repository Health Metrics")
-
 h1, h2, h3, h4 = st.columns(4)
 h1.metric("Stars", metadata['stars'])
 h2.metric("Forks", metadata['forks'])
@@ -149,8 +164,13 @@ summary = (
     f"Domain: {metadata['domain']}\n"
     f"Requirements: {', '.join(metadata['requirements']) or 'None'}\n"
     f"Languages: {', '.join(f'{lang} ({pct:.0f}%)' for lang, pct in metadata['languages'].items())}\n"
+    f"Topics: {', '.join(metadata['topics']) or 'None'}\n"
     f"License: {metadata['license']}\n"
-    f"Stats: Stars={metadata['stars']}, Forks={metadata['forks']}, Issues={metadata['open_issues']}, CI={'Yes' if metadata['has_ci'] else 'No'}\n"
+    f"Stars: {metadata['stars']}, Forks: {metadata['forks']}, Issues: {metadata['open_issues']}\n"
+    f"Last push: {metadata['last_push']}\n"
+    f"Size (KB): {metadata['size_kb']}\n"
+    f"CI configured: {'Yes' if metadata['has_ci'] else 'No'}\n"
+    f"Contributors: {metadata['contributors']}\n"
     f"Biometric Data: {'Yes' if metadata['biometric_data'] else 'No'}\n"
     f"Human-in-the-loop: {'Yes' if metadata['human_in_loop'] else 'No'}"
 )
